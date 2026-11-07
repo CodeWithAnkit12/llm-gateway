@@ -1,0 +1,31 @@
+{
+  "name": "llm-gateway",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+"scripts": {
+  "hello": "tsx src/hello.ts",
+  "try": "tsx src/scripts/try-models.ts",
+  "debug": "tsx src/scripts/debug-providers.ts",
+  "dev": "tsx watch src/server.ts",
+  "client": "tsx src/scripts/client-test.ts",
+  "typecheck": "tsc --noEmit"
+},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "openai": "^7.53.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "debug": "tsx src/scripts/debug-providers.ts"
+}
