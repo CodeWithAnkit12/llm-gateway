@@ -75,20 +75,24 @@ export async function reliableCall(
         return { result, attempts, usedFallback: modelId !== primary };
       } catch (err) {
         const message = (err as Error).message;
-        const next = classify(err);
+        // Decide the REAL next action first, then log it
+        const willRetry =
+          classify(err) === "retry_same" && retry < MAX_RETRIES_SAME_MODEL;
         attempts.push({
           modelId,
           ok: false,
           error: message,
           latencyMs: Date.now() - start,
         });
-        console.log(`[reliable] ${modelId} failed: ${message} -> ${next}`);
+        console.log(
+          `[reliable] ${modelId} failed: ${message} -> ${willRetry ? "retrying same model" : "trying next model"}`,
+        );
 
-        if (next === "retry_same" && retry < MAX_RETRIES_SAME_MODEL) {
+        if (willRetry) {
           await sleep(backoffMs(retry));
-          continue; // same model, one more time
+          continue;
         }
-        break; // move to the next model in the chain
+        break;
       }
     }
   }

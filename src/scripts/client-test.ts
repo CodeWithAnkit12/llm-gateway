@@ -1,47 +1,44 @@
+import "dotenv/config";
 import OpenAI from "openai";
 
-const gateway = new OpenAI({
-  apiKey: "not-needed-yet",
-  baseURL: "http://localhost:3000/v1",
-  maxRetries: 0, // IMPORTANT: the gateway already retries; don't retry twice
-});
+const BASE_URL = "http://localhost:3000/v1";
 
-async function ask(
-  label: string,
-  content: string,
-  headers: Record<string, string> = {},
-) {
+async function ask(label: string, apiKey: string) {
+  const client = new OpenAI({ apiKey, baseURL: BASE_URL, maxRetries: 0 });
   try {
-    const res = await gateway.chat.completions.create(
-      { model: "auto", messages: [{ role: "user", content }] },
-      { headers },
+    const res = await client.chat.completions.create({
+      model: "auto",
+      messages: [{ role: "user", content: "Say hi in 3 words." }],
+    });
+    console.log(
+      `[${label}] OK -> ${res.model}: ${res.choices[0]?.message?.content}`,
     );
-    const gw = (res as unknown as { gateway: Record<string, unknown> }).gateway;
-    console.log(`\n[${label}]`);
-    console.log(`  final model : ${res.model}`);
-    console.log(`  reason      : ${gw.route_reason}`);
-    console.log(`  fallback    : ${gw.used_fallback}`);
-    console.log(`  attempts    :`, gw.attempts);
-    console.log(`  cost        : $${gw.cost_usd}`);
-    console.log(`  latency     : ${gw.latency_ms} ms`);
   } catch (err) {
-    console.log(`\n[${label}] FAILED: ${(err as Error).message}`);
+    console.log(`[${label}] ${(err as Error).message}`);
   }
 }
 
 async function main() {
-  await ask("1. normal day", "What is Redis, in one sentence?");
-  await ask("2. Groq is down", "What is Redis, in one sentence?", {
-    "x-simulate-outage": "groq",
+  const acme = process.env.TEST_KEY_ACME ?? "";
+  const globex = process.env.TEST_KEY_GLOBEX ?? "";
+
+  console.log("\n--- 1. Auth ---");
+  // No key at all (plain fetch, because the OpenAI SDK refuses to send without a key)
+  const r = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
   });
-  await ask(
-    "3. Gemini is down (high priority)",
-    "What is Redis, in one sentence?",
-    {
-      "x-priority": "high",
-      "x-simulate-outage": "gemini",
-    },
-  );
+  console.log(`[no key] ${r.status}`, await r.json());
+  await ask("wrong key", "gw_this_is_fake");
+
+  console.log("\n--- 2. Rate limit: acme allows 3/min, we send 5 ---");
+  for (let i = 1; i <= 5; i++) {
+    await ask(`acme #${i}`, acme);
+  }
+
+  console.log("\n--- 3. Other tenant is NOT affected ---");
+  await ask("globex", globex);
 }
 
 main();

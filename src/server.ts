@@ -1,15 +1,20 @@
-import "dotenv/config";
+import "dotenv/config"; // MUST stay the first import
 import express from "express";
-import { chatRouter } from "./routes/chat";
+import { chatRouter } from "./routes/chat.js";
+import { requireApiKey } from "./middleware/auth.js";
+import { rateLimit } from "./middleware/rateLimit.js";
 
 const app = express();
 
-app.use(express.json({ limit: "1mb" })); // read JSON bodies, max 1 MB
+app.use(express.json({ limit: "1mb" }));
 
-// Health check: "is the server alive?"
+// Public: no key needed
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
+
+// Everything under /v1 needs a key and respects the rate limit, IN THIS ORDER
+app.use("/v1", requireApiKey, rateLimit);
 
 app.use(chatRouter);
 
