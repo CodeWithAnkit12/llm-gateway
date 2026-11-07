@@ -2,20 +2,19 @@ import type { ProviderName } from "./providers.js";
 
 export type Tier = "cheap" | "premium" | "fallback";
 
-// LOGICAL names: our code uses these. They never change,
-// even when a provider renames or removes a model.
 export type ModelId = "groq-cheap" | "gemini-premium" | "openrouter-free";
 
 export type ModelInfo = {
   provider: ProviderName;
-  model: string; // exact name the provider expects (this CAN change)
+  model: string;
   tier: Tier;
-  inputPricePer1M: number; // USD, published PAID price (for shadow cost)
-  outputPricePer1M: number; // USD
+  inputPricePer1M: number;
+  outputPricePer1M: number;
   reasoningEffort?: "low" | "medium" | "high";
+  timeoutMs: number; // NEW: each model gets its own patience limit
 };
 
-// Prices checked on 7 Nov 2026. When prices change, update THIS table.
+// Prices checked on 7 Nov 2026. Timeouts based on our measured latency.
 export const MODELS: Record<ModelId, ModelInfo> = {
   "groq-cheap": {
     provider: "groq",
@@ -24,20 +23,23 @@ export const MODELS: Record<ModelId, ModelInfo> = {
     inputPricePer1M: 0.075,
     outputPricePer1M: 0.3,
     reasoningEffort: "low",
+    timeoutMs: 10_000, // usually answers in ~1 s
   },
   "gemini-premium": {
     provider: "gemini",
-    model: "gemini-3.6-flash", // 3.8 timed out in our tests on 7 Nov 2026
+    model: "gemini-3.6-flash",
     tier: "premium",
-    inputPricePer1M: 0.75, // intro price; becomes $1.50 on 1 Jan 2027
-    outputPricePer1M: 3.75, // becomes $7.50 on 1 Jan 2027
+    inputPricePer1M: 0.75,
+    outputPricePer1M: 3.75,
     reasoningEffort: "low",
+    timeoutMs: 25_000, // slowest we saw was ~6 s; thinking takes time
   },
   "openrouter-free": {
     provider: "openrouter",
-    model: "google/gemma-4-26b-a4b-it:free", // free models rotate, check monthly
+    model: "google/gemma-4-26b-a4b-it:free",
     tier: "fallback",
-    inputPricePer1M: 0.068, // price of the PAID version, for shadow cost
+    inputPricePer1M: 0.068,
     outputPricePer1M: 0.225,
+    timeoutMs: 15_000,
   },
 };

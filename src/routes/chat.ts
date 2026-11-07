@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { callModel, type ChatMessage } from "../llm/callModel.js";
+import { reliableCall, AllProvidersFailedError } from "../llm/reliableCall.js";
 import { MODELS, type ModelId } from "../config/models.js";
 import { route, needsEscalation } from "../router/router.js";
 
@@ -9,7 +10,6 @@ export const chatRouter = Router();
 const modelIds = Object.keys(MODELS) as [ModelId, ...ModelId[]];
 const modelChoices = ["auto", ...modelIds] as ["auto", ...ModelId[]];
 
-// BODY: standard OpenAI shape
 const ChatRequestSchema = z.object({
   model: z.enum(modelChoices).default("auto"),
   messages: z
@@ -23,18 +23,17 @@ const ChatRequestSchema = z.object({
   max_tokens: z.number().int().positive().max(4000).optional(),
 });
 
-// HEADERS: our gateway's extra routing hints
 const HeadersSchema = z.object({
   "x-task-type": z
     .enum(["chat", "summarize", "extract", "code", "reasoning"])
     .optional(),
   "x-priority": z.enum(["low", "normal", "high"]).default("normal"),
+  "x-simulate-outage": z.enum(["groq", "gemini", "openrouter"]).optional(), // testing only
 });
 
 chatRouter.post("/v1/chat/completions", async (req, res) => {
   const start = Date.now();
 
-  // 1. Check body and headers
   const body = ChatRequestSchema.safeParse(req.body);
   if (!body.success) {
     res
@@ -57,7 +56,12 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
   const { model, max_tokens } = body.data;
   const messages = body.data.messages as ChatMessage[];
 
-  // 2. Ask the router which model to use
+  // Never let real users trigger fake outages in production
+  const simulateOutage =
+    process.env.NODE_ENV === "production"
+      ? undefined
+      : headers.data["x-simulate-outage"];
+
   const decision = route({
     requestedModel: model,
     messages,
@@ -66,30 +70,41 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
   });
 
   try {
-    // 3. Call the chosen model
-    let r = await callModel(decision.modelId, messages, max_tokens);
+    // 1. Call with retries + fallback
+    const rel = await reliableCall(decision.modelId, messages, {
+      maxTokens: max_tokens,
+      simulateOutage,
+    });
+    let r = rel.result;
     let totalCostUsd = r.costUsd;
+    let reason = decision.reason;
     let escalated = false;
 
-    // 4. Safety net: cheap answer looks broken → try premium once
+    if (rel.usedFallback) reason += ` → fallback to ${r.modelId}`;
+
+    // 2. Safety net: non-premium answer looks broken → try premium once
     if (
       model === "auto" &&
-      decision.modelId === "groq-cheap" &&
+      MODELS[r.modelId].tier !== "premium" &&
       needsEscalation(r)
     ) {
-      console.log(
-        `[router] cheap answer failed check (finish: ${r.finishReason}), escalating`,
-      );
-      r = await callModel("gemini-premium", messages, max_tokens);
-      totalCostUsd += r.costUsd; // we pay for BOTH calls
-      escalated = true;
+      try {
+        const better = await callModel("gemini-premium", messages, max_tokens);
+        totalCostUsd += better.costUsd;
+        r = better;
+        escalated = true;
+        reason += " → escalated: cheap answer was cut off or empty";
+      } catch (err) {
+        // Graceful degradation: a cut-off answer is better than an error
+        console.log(
+          "[router] escalation failed, keeping cheap answer:",
+          (err as Error).message,
+        );
+      }
     }
 
-    console.log(
-      `[router] ${r.modelId} | ${decision.reason} | escalated=${escalated}`,
-    );
+    console.log(`[router] ${r.modelId} | ${reason}`);
 
-    // 5. Reply
     res.json({
       id: `gw-${crypto.randomUUID()}`,
       object: "chat.completion",
@@ -110,16 +125,29 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
       gateway: {
         provider: r.provider,
         tier: MODELS[r.modelId].tier,
-        route_reason: decision.reason,
+        route_reason: reason,
         escalated,
-        cost_usd: Number(totalCostUsd.toFixed(10)), // round away float noise
-        latency_ms: Date.now() - start, // total time, including escalation
+        used_fallback: rel.usedFallback,
+        attempts: rel.attempts,
+        cost_usd: Number(totalCostUsd.toFixed(10)),
+        latency_ms: Date.now() - start,
       },
     });
   } catch (err) {
-    console.error(`[chat] ${decision.modelId} failed:`, (err as Error).message);
-    res.status(502).json({
-      error: { message: "The AI provider failed. Please try again." },
-    });
+    if (err instanceof AllProvidersFailedError) {
+      console.error("[chat] all providers failed:", err.attempts);
+      res.status(502).json({
+        error: {
+          message: "All AI providers failed. Please try again later.",
+          attempts: err.attempts.map((a) => ({
+            model: a.modelId,
+            error: a.error,
+          })),
+        },
+      });
+      return;
+    }
+    console.error("[chat] unexpected error:", err);
+    res.status(500).json({ error: { message: "Internal gateway error" } });
   }
 });
