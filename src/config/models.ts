@@ -43,3 +43,13 @@ export const MODELS: Record<ModelId, ModelInfo> = {
     timeoutMs: 15_000,
   },
 };
+
+// What this request WOULD have cost if everything went to premium.
+// An estimate: it uses the cheap model's token counts.
+export function premiumBaselineUsd(inputTokens: number, outputTokens: number): number {
+  const p = MODELS["gemini-premium"];
+  return (
+    (inputTokens / 1_000_000) * p.inputPricePer1M +
+    (outputTokens / 1_000_000) * p.outputPricePer1M
+  );
+}

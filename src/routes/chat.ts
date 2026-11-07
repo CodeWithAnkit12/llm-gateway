@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   callModel,
@@ -10,10 +11,11 @@ import {
   AllProvidersFailedError,
   type Attempt,
 } from "../llm/reliableCall.js";
-import { MODELS, type ModelId } from "../config/models.js";
+import { MODELS, premiumBaselineUsd, type ModelId } from "../config/models.js";
 import type { Tenant } from "../config/tenants.js";
 import { route, needsEscalation } from "../router/router.js";
 import { makeCacheKey, getCached, setCached } from "../cache/responseCache.js";
+import { logRequest } from "../db/logRequest.js";
 
 export const chatRouter = Router();
 
@@ -39,25 +41,25 @@ const HeadersSchema = z.object({
     .optional(),
   "x-priority": z.enum(["low", "normal", "high"]).default("normal"),
   "x-simulate-outage": z.enum(["groq", "gemini", "openrouter"]).optional(),
-  "x-cache": z.enum(["bypass"]).optional(), // NEW: skip the cache
+  "x-cache": z.enum(["bypass"]).optional(),
 });
 
 type GatewayMeta = {
+  requestId: string;
   tenantId: string;
   reason: string;
   cache: "hit" | "miss" | "bypass";
   escalated: boolean;
   usedFallback: boolean;
   attempts: Attempt[];
-  costUsd: number; // what THIS request cost
-  savedUsd: number; // what the cache saved us
+  costUsd: number;
+  savedUsd: number;
   latencyMs: number;
 };
 
-// Build the OpenAI-style response in ONE place
 function toOpenAIResponse(r: LLMResult, meta: GatewayMeta) {
   return {
-    id: `gw-${crypto.randomUUID()}`,
+    id: `gw-${meta.requestId}`,
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model: r.modelId,
@@ -74,6 +76,7 @@ function toOpenAIResponse(r: LLMResult, meta: GatewayMeta) {
       total_tokens: r.inputTokens + r.outputTokens,
     },
     gateway: {
+      request_id: meta.requestId,
       tenant: meta.tenantId,
       provider: r.provider,
       tier: MODELS[r.modelId].tier,
@@ -91,7 +94,8 @@ function toOpenAIResponse(r: LLMResult, meta: GatewayMeta) {
 
 chatRouter.post("/v1/chat/completions", async (req, res) => {
   const start = Date.now();
-  const tenant = res.locals.tenant as Tenant; // set by the auth middleware
+  const requestId = randomUUID(); // one ID to trace this request everywhere
+  const tenant = res.locals.tenant as Tenant;
 
   const body = ChatRequestSchema.safeParse(req.body);
   if (!body.success) {
@@ -120,7 +124,6 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
       ? undefined
       : headers.data["x-simulate-outage"];
 
-  // 1. Route (fast, no network)
   const decision = route({
     requestedModel: model,
     messages,
@@ -128,7 +131,7 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
     priority: headers.data["x-priority"],
   });
 
-  // 2. Cache lookup
+  // ---- Cache lookup ----
   const cacheKey = makeCacheKey(
     tenant.id,
     decision.modelId,
@@ -138,28 +141,52 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
   if (!bypassCache) {
     const hit = await getCached(cacheKey);
     if (hit) {
-      console.log(
-        `[cache] HIT  tenant=${tenant.id} model=${hit.result.modelId}`,
-      );
+      const r = hit.result;
+      const reason = `${decision.reason} → cache hit`;
+      const latencyMs = Date.now() - start;
+      console.log(`[cache] HIT  tenant=${tenant.id} model=${r.modelId}`);
+
       res.json(
-        toOpenAIResponse(hit.result, {
+        toOpenAIResponse(r, {
+          requestId,
           tenantId: tenant.id,
-          reason: `${decision.reason} → cache hit`,
+          reason,
           cache: "hit",
           escalated: false,
           usedFallback: false,
           attempts: [],
-          costUsd: 0, // no AI call!
-          savedUsd: hit.result.costUsd, // what we would have paid
-          latencyMs: Date.now() - start,
+          costUsd: 0,
+          savedUsd: r.costUsd,
+          latencyMs,
         }),
       );
+
+      void logRequest({
+        requestId,
+        tenantId: tenant.id,
+        requestedModel: model,
+        modelId: r.modelId,
+        provider: r.provider,
+        tier: MODELS[r.modelId].tier,
+        routeReason: reason,
+        status: "ok",
+        httpStatus: 200,
+        cache: "hit",
+        inputTokens: r.inputTokens,
+        outputTokens: r.outputTokens,
+        costUsd: 0,
+        baselineCostUsd: premiumBaselineUsd(r.inputTokens, r.outputTokens),
+        savedUsd: r.costUsd,
+        latencyMs,
+      });
       return;
     }
   }
 
+  const cacheStatus = bypassCache ? "bypass" : "miss";
+
   try {
-    // 3. Call the AI (retries + fallback)
+    // ---- AI call with retries + fallback ----
     const rel = await reliableCall(decision.modelId, messages, {
       maxTokens: max_tokens,
       simulateOutage,
@@ -171,7 +198,7 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
 
     if (rel.usedFallback) reason += ` → fallback to ${r.modelId}`;
 
-    // 4. Safety net: escalate broken non-premium answers
+    // ---- Safety net: escalation ----
     if (
       model === "auto" &&
       MODELS[r.modelId].tier !== "premium" &&
@@ -191,30 +218,52 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
       }
     }
 
+    const latencyMs = Date.now() - start;
     console.log(`[router] tenant=${tenant.id} ${r.modelId} | ${reason}`);
 
-    // 5. Respond FIRST (the user shouldn't wait for the cache write)
+    // ---- 1. Respond first ----
     res.json(
       toOpenAIResponse(r, {
+        requestId,
         tenantId: tenant.id,
         reason,
-        cache: bypassCache ? "bypass" : "miss",
+        cache: cacheStatus,
         escalated,
         usedFallback: rel.usedFallback,
         attempts: rel.attempts,
         costUsd: totalCostUsd,
         savedUsd: 0,
-        latencyMs: Date.now() - start,
+        latencyMs,
       }),
     );
 
-    // 6. Then save to cache, but only GOOD answers from the intended model
-    const worthCaching =
-      !bypassCache && !rel.usedFallback && !needsEscalation(r);
-    if (worthCaching) {
-      void setCached(cacheKey, r); // "void" = start it, don't wait for it
+    // ---- 2. Then background work: cache + log ----
+    if (!bypassCache && !rel.usedFallback && !needsEscalation(r)) {
+      void setCached(cacheKey, r);
     }
+    void logRequest({
+      requestId,
+      tenantId: tenant.id,
+      requestedModel: model,
+      modelId: r.modelId,
+      provider: r.provider,
+      tier: MODELS[r.modelId].tier,
+      routeReason: reason,
+      status: "ok",
+      httpStatus: 200,
+      cache: cacheStatus,
+      escalated,
+      usedFallback: rel.usedFallback,
+      attempts: rel.attempts.length,
+      inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens,
+      costUsd: totalCostUsd,
+      baselineCostUsd: premiumBaselineUsd(r.inputTokens, r.outputTokens),
+      latencyMs,
+    });
   } catch (err) {
+    const latencyMs = Date.now() - start;
+
     if (err instanceof AllProvidersFailedError) {
       console.error("[chat] all providers failed:", err.attempts);
       res.status(502).json({
@@ -226,9 +275,32 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
           })),
         },
       });
+      void logRequest({
+        requestId,
+        tenantId: tenant.id,
+        requestedModel: model,
+        routeReason: decision.reason,
+        status: "error",
+        httpStatus: 502,
+        cache: cacheStatus,
+        attempts: err.attempts.length,
+        latencyMs,
+        error: err.attempts.map((a) => `${a.modelId}: ${a.error}`).join(" | "),
+      });
       return;
     }
+
     console.error("[chat] unexpected error:", err);
     res.status(500).json({ error: { message: "Internal gateway error" } });
+    void logRequest({
+      requestId,
+      tenantId: tenant.id,
+      requestedModel: model,
+      status: "error",
+      httpStatus: 500,
+      cache: cacheStatus,
+      latencyMs,
+      error: (err as Error).message,
+    });
   }
 });

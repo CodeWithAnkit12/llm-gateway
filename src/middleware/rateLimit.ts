@@ -1,9 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
 import { Ratelimit } from "@upstash/ratelimit";
-import type { Tenant } from "../config/tenants.js";
 import { redis } from "../lib/redis.js";
+import type { Tenant } from "../config/tenants.js";
+import { logRequest } from "../db/logRequest.js";
 
-// One limiter per limit size (3/min, 20/min, ...), created on first use
 const limiters = new Map<number, Ratelimit>();
 
 function getLimiter(perMinute: number): Ratelimit {
@@ -13,7 +14,7 @@ function getLimiter(perMinute: number): Ratelimit {
       redis,
       limiter: Ratelimit.slidingWindow(perMinute, "60 s"),
       prefix: `gw:ratelimit:${perMinute}`,
-      timeout: 1000, // if Redis is slow for 1 s, let the request through
+      timeout: 1000,
     });
     limiters.set(perMinute, limiter);
   }
@@ -30,9 +31,8 @@ export async function rateLimit(
   try {
     const { success, limit, remaining, reset } = await getLimiter(
       tenant.requestsPerMinute,
-    ).limit(tenant.id); // count PER TENANT
+    ).limit(tenant.id);
 
-    // Standard headers so clients can see their limit
     res.setHeader("X-RateLimit-Limit", limit);
     res.setHeader("X-RateLimit-Remaining", remaining);
 
@@ -44,10 +44,19 @@ export async function rateLimit(
           message: `Rate limit exceeded: ${limit} requests per minute. Try again in ${retryAfterSec}s.`,
         },
       });
+      // NEW: count rejections too (one of our dashboard metrics)
+      void logRequest({
+        requestId: randomUUID(),
+        tenantId: tenant.id,
+        requestedModel: String(req.body?.model ?? "auto"),
+        status: "rate_limited",
+        httpStatus: 429,
+        cache: "none",
+        latencyMs: 0,
+      });
       return;
     }
   } catch (err) {
-    // If Redis is down, we choose to let traffic through (fail-open)
     console.error(
       "[ratelimit] Redis error, allowing request:",
       (err as Error).message,
