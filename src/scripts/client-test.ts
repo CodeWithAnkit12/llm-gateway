@@ -3,42 +3,45 @@ import OpenAI from "openai";
 
 const BASE_URL = "http://localhost:3000/v1";
 
-async function ask(label: string, apiKey: string) {
+async function ask(
+  label: string,
+  apiKey: string,
+  content: string,
+  headers: Record<string, string> = {},
+) {
   const client = new OpenAI({ apiKey, baseURL: BASE_URL, maxRetries: 0 });
   try {
-    const res = await client.chat.completions.create({
-      model: "auto",
-      messages: [{ role: "user", content: "Say hi in 3 words." }],
-    });
-    console.log(
-      `[${label}] OK -> ${res.model}: ${res.choices[0]?.message?.content}`,
+    const res = await client.chat.completions.create(
+      { model: "auto", messages: [{ role: "user", content }] },
+      { headers },
     );
+    const gw = (res as unknown as { gateway: Record<string, unknown> }).gateway;
+    console.log(`\n[${label}]`);
+    console.log(`  cache   : ${gw.cache}`);
+    console.log(`  model   : ${res.model}`);
+    console.log(`  cost    : $${gw.cost_usd}   saved: $${gw.saved_usd}`);
+    console.log(`  latency : ${gw.latency_ms} ms`);
   } catch (err) {
-    console.log(`[${label}] ${(err as Error).message}`);
+    console.log(`\n[${label}] ${(err as Error).message}`);
   }
 }
 
 async function main() {
   const acme = process.env.TEST_KEY_ACME ?? "";
   const globex = process.env.TEST_KEY_GLOBEX ?? "";
+  const q = "What is a CDN, in one sentence?";
 
-  console.log("\n--- 1. Auth ---");
-  // No key at all (plain fetch, because the OpenAI SDK refuses to send without a key)
-  const r = await fetch(`${BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+  await ask("1. first time (expect MISS)", globex, q);
+  await ask("2. same question (expect HIT)", globex, q);
+  await ask("3. bypass header (expect BYPASS)", globex, q, {
+    "x-cache": "bypass",
   });
-  console.log(`[no key] ${r.status}`, await r.json());
-  await ask("wrong key", "gw_this_is_fake");
-
-  console.log("\n--- 2. Rate limit: acme allows 3/min, we send 5 ---");
-  for (let i = 1; i <= 5; i++) {
-    await ask(`acme #${i}`, acme);
-  }
-
-  console.log("\n--- 3. Other tenant is NOT affected ---");
-  await ask("globex", globex);
+  await ask(
+    "4. one extra space (expect MISS)",
+    globex,
+    "What is a CDN,  in one sentence?",
+  );
+  await ask("5. other tenant, same question (expect MISS)", acme, q);
 }
 
 main();

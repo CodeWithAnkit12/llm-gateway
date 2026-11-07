@@ -1,9 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { Ratelimit } from "@upstash/ratelimit";
-import { Redis } from "@upstash/redis";
 import type { Tenant } from "../config/tenants.js";
-
-const redis = Redis.fromEnv(); // reads the two UPSTASH_ values from .env
+import { redis } from "../lib/redis.js";
 
 // One limiter per limit size (3/min, 20/min, ...), created on first use
 const limiters = new Map<number, Ratelimit>();
