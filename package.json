@@ -14,7 +14,8 @@
     "check-keys": "tsx src/scripts/check-keys.ts",
     "db:migrate": "tsx src/scripts/db-migrate.ts",
     "db:stats": "tsx src/scripts/db-stats.ts",
-    "traffic": "tsx src/scripts/traffic.ts"
+    "traffic": "tsx src/scripts/traffic.ts",
+    "eval": "tsx src/eval/run-eval.ts"
   },
   "keywords": [],
   "author": "",
