@@ -58,9 +58,15 @@ function backoffMs(retry: number): number {
 export async function reliableCall(
   primary: ModelId,
   messages: ChatMessage[],
-  opts: { maxTokens?: number; simulateOutage?: ProviderName } = {},
+  opts: {
+    maxTokens?: number;
+    simulateOutage?: ProviderName;
+    noFallback?: boolean;
+  } = {},
 ): Promise<ReliableResult> {
-  const chain = [primary, ...FALLBACK_CHAIN[primary]];
+  const chain = opts.noFallback
+    ? [primary]
+    : [primary, ...FALLBACK_CHAIN[primary]];
   const attempts: Attempt[] = [];
 
   for (const modelId of chain) {

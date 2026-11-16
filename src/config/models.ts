@@ -27,10 +27,10 @@ export const MODELS: Record<ModelId, ModelInfo> = {
   },
   "gemini-premium": {
     provider: "gemini",
-    model: "gemini-3.6-flash",
+    model: "gemini-3-flash-preview", // 3.6 hit its 20/day free quota; separate quota per model
     tier: "premium",
-    inputPricePer1M: 0.75,
-    outputPricePer1M: 3.75,
+    inputPricePer1M: 0.5,
+    outputPricePer1M: 3.0,
     reasoningEffort: "low",
     timeoutMs: 25_000, // slowest we saw was ~6 s; thinking takes time
   },

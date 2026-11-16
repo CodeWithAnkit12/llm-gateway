@@ -35,14 +35,21 @@ const ChatRequestSchema = z.object({
   max_tokens: z.number().int().positive().max(4000).optional(),
 });
 
+
 const HeadersSchema = z.object({
   "x-task-type": z
     .enum(["chat", "summarize", "extract", "code", "reasoning"])
     .optional(),
+
   "x-priority": z.enum(["low", "normal", "high"]).default("normal"),
+
   "x-simulate-outage": z.enum(["groq", "gemini", "openrouter"]).optional(),
+
   "x-cache": z.enum(["bypass"]).optional(),
+
+  "x-fallback": z.enum(["off"]).optional(), // client can refuse fallback answers
 });
+
 
 type GatewayMeta = {
   requestId: string;
@@ -190,6 +197,7 @@ chatRouter.post("/v1/chat/completions", async (req, res) => {
     const rel = await reliableCall(decision.modelId, messages, {
       maxTokens: max_tokens,
       simulateOutage,
+      noFallback: headers.data["x-fallback"] === "off",
     });
     let r = rel.result;
     let totalCostUsd = r.costUsd;
