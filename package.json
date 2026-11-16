@@ -1,6 +1,10 @@
 {
   "name": "llm-gateway",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,18 +13,19 @@
     "debug": "tsx src/scripts/debug-providers.ts",
     "dev": "tsx watch src/server.ts",
     "client": "tsx src/scripts/client-test.ts",
-    "typecheck": "tsc --noEmit",
     "new-key": "tsx src/scripts/new-key.ts",
     "check-keys": "tsx src/scripts/check-keys.ts",
     "db:migrate": "tsx src/scripts/db-migrate.ts",
     "db:stats": "tsx src/scripts/db-stats.ts",
     "traffic": "tsx src/scripts/traffic.ts",
-    "eval": "tsx src/eval/run-eval.ts"
+    "eval": "tsx src/eval/run-eval.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "start": "node dist/server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
     "@upstash/ratelimit": "^2.2.0",

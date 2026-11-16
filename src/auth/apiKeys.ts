@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { TENANTS, type Tenant } from "../config/tenants";
-
+import { TENANTS, type Tenant } from "../config/tenants.js";   
 // One-way fingerprint of a key
 export function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
