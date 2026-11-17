@@ -228,7 +228,7 @@ async function Dashboard({ searchParams }: { searchParams: Promise<{ range?: str
               {recent.map((r, i) => (
                 <tr key={i} className="border-t border-zinc-800" title={r.route_reason ?? ""}>
                   <td className="whitespace-nowrap py-2 text-zinc-400">
-                    {new Date(r.created_at).toLocaleTimeString("en-IN")}
+                    {new Date(r.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })}
                   </td>
                   <td>{r.tenant_id}</td>
                   <td>

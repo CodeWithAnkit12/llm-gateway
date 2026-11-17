@@ -3,7 +3,7 @@ import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.TEST_KEY_GLOBEX ?? "",
-  baseURL: "http://localhost:3000/v1",
+  baseURL: process.env.GATEWAY_URL ?? "http://localhost:3000/v1",
   maxRetries: 0,
 });
 
