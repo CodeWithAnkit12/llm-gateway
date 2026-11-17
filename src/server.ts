@@ -8,6 +8,19 @@ const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 
+// Friendly landing response for anyone who opens the URL
+app.get("/", (_req, res) => {
+  res.json({
+    name: "LLM Gateway",
+    description: "Cost-aware routing across Groq, Gemini and OpenRouter (OpenAI-compatible API)",
+    endpoints: {
+      health: "GET /health",
+      chat: "POST /v1/chat/completions (requires API key)",
+    },
+    source: "https://github.com/CodeWithAnkit12/llm-gateway",
+  });
+});
+
 // Public: no key needed
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
